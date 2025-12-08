@@ -134,18 +134,4 @@ http://localhost:5173
 - Optimized filtering and sorting logic
 - Reduced unnecessary re-renders in frontend
 
-## Notes
-- Designed to handle large datasets
-- Easily extendable with charts, analytics, and exports
-- Clean and maintainable code structure
 
-## Author
-Neha
-
-## Assignment Status
-- Backend API completed
-- Frontend UI completed
-- Search implemented
-- Filters implemented
-- Sorting implemented
-- Pagination implemented
