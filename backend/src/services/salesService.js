@@ -1,238 +1,156 @@
 // backend/src/services/salesService.js
-
-const { loadSalesData } = require('../utils/dataLoader');
-
-// In–memory cache so we don’t keep re-reading the CSV / remote dataset
-let salesCache = [];
-let isLoaded = false;
+import { loadSalesData } from "../utils/dataLoader.js";
 
 /**
- * Ensure data is loaded exactly once.
+ * Main query function used by the controller.
+ * Called as: querySales(req.query)
  */
-async function ensureDataLoaded() {
-  if (!isLoaded) {
-    salesCache = await loadSalesData();
-    isLoaded = true;
-  }
-}
-
-/**
- * Turn querystring values into an array.
- * Supports:
- *   region=East,West  OR  region=East&region=West
- */
-function toArray(value) {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.filter(Boolean);
-  return String(value)
-    .split(',')
-    .map(v => v.trim())
-    .filter(Boolean);
-}
-
-/**
- * Parse query params and give back a normalized filter object.
- */
-function parseFilters(query = {}) {
-  const page = Number.parseInt(query.page, 10) || 1;
-  const pageSize = Number.parseInt(query.pageSize, 10) || 10;
-
-  return {
-    search: (query.search || '').trim().toLowerCase(),
-
-    regions: toArray(query.region),
-    genders: toArray(query.gender),
-    categories: toArray(query.category),
-    paymentMethods: toArray(query.paymentMethod),
-    tags: toArray(query.tags),
-
-    // Optional numeric range
-    minAge: query.minAge ? Number(query.minAge) : null,
-    maxAge: query.maxAge ? Number(query.maxAge) : null,
-
-    // Optional date range (ISO string: 2023-09-01)
-    dateFrom: query.dateFrom ? new Date(query.dateFrom) : null,
-    dateTo: query.dateTo ? new Date(query.dateTo) : null,
-
-    sortBy: query.sortBy || 'date',        // 'date' | 'quantity' | 'customer'
-    sortOrder: query.sortOrder || 'desc',  // 'asc' | 'desc'
-    page: page < 1 ? 1 : page,
-    pageSize: pageSize > 0 ? pageSize : 10,
-  };
-}
-
-/**
- * Apply search + filter conditions on the dataset.
- */
-function applySearchAndFilters(data, filters) {
+export async function querySales(query) {
   const {
-    search,
-    regions,
-    genders,
-    categories,
-    paymentMethods,
+    page = "1",
+    pageSize = "10",
+    search = "",
+    region,
+    gender,
+    category,
+    paymentMethod,
     tags,
+    sortBy = "date",
+    sortOrder = "desc",
+    startDate,
+    endDate,
     minAge,
     maxAge,
-    dateFrom,
-    dateTo,
-  } = filters;
+  } = query;
 
-  return data.filter(row => {
-    // --- Search (customer name / phone, case-insensitive) ---
-    if (search) {
-      const name = String(row['Customer Name'] || '').toLowerCase();
-      const phone = String(row['Phone Number'] || '').toLowerCase();
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const sizeNum = Math.max(1, parseInt(pageSize, 10) || 10);
 
-      if (!name.includes(search) && !phone.includes(search)) {
+  const searchTerm = search.trim().toLowerCase();
+
+  const regionList = splitParam(region);
+  const genderList = splitParam(gender);
+  const categoryList = splitParam(category);
+  const paymentList = splitParam(paymentMethod);
+  const tagList = splitParam(tags);
+
+  const minAgeNum = minAge ? Number(minAge) : null;
+  const maxAgeNum = maxAge ? Number(maxAge) : null;
+
+  const startDateObj = startDate ? new Date(startDate) : null;
+  const endDateObj = endDate ? new Date(endDate) : null;
+
+  const data = await loadSalesData();
+
+  // 1) SEARCH + FILTERS
+  let filtered = data.filter((row) => {
+    // search: customer name OR phone
+    if (searchTerm) {
+      const name = (row.customerName || "").toLowerCase();
+      const phone = (row.phoneNumber || "").toLowerCase();
+      if (!name.includes(searchTerm) && !phone.includes(searchTerm)) {
         return false;
       }
     }
 
-    // --- Region filter (multi-select) ---
-    if (regions.length && !regions.includes(row['Customer Region'])) {
+    // region
+    if (regionList.length && !regionList.includes(row.customerRegion)) {
       return false;
     }
 
-    // --- Gender filter (multi-select) ---
-    if (genders.length && !genders.includes(row['Gender'])) {
+    // gender
+    if (genderList.length && !genderList.includes(row.gender)) {
       return false;
     }
 
-    // --- Product category ---
-    if (categories.length && !categories.includes(row['Product Category'])) {
+    // product category
+    if (categoryList.length && !categoryList.includes(row.productCategory)) {
       return false;
     }
 
-    // --- Payment method ---
-    if (paymentMethods.length && !paymentMethods.includes(row['Payment Method'])) {
+    // payment method
+    if (paymentList.length && !paymentList.includes(row.paymentMethod)) {
       return false;
     }
 
-    // --- Tags (at least one must match) ---
-    if (tags.length) {
-      const rowTags = String(row['Tags'] || '')
-        .split('|')
-        .map(t => t.trim())
-        .filter(Boolean);
-
-      const hasAnyTag = tags.some(tag => rowTags.includes(tag));
-      if (!hasAnyTag) return false;
-    }
-
-    // --- Age range ---
-    if (minAge !== null || maxAge !== null) {
-      const age = Number(row['Age']);
-      if (Number.isFinite(age)) {
-        if (minAge !== null && age < minAge) return false;
-        if (maxAge !== null && age > maxAge) return false;
-      }
-    }
-
-    // --- Date range ---
-    if (dateFrom || dateTo) {
-      const rowDate = new Date(row['Date']);
-      if (Number.isNaN(rowDate.getTime())) {
+    // tags (simple contains check)
+    if (tagList.length) {
+      const rowTags = (row.tags || "").toLowerCase();
+      const hasOneTag = tagList.some((t) => rowTags.includes(t.toLowerCase()));
+      if (!hasOneTag) {
         return false;
       }
-      if (dateFrom && rowDate < dateFrom) return false;
-      if (dateTo && rowDate > dateTo) return false;
+    }
+
+    // age range
+    if (minAgeNum !== null && row.age !== null && row.age < minAgeNum) {
+      return false;
+    }
+    if (maxAgeNum !== null && row.age !== null && row.age > maxAgeNum) {
+      return false;
+    }
+
+    // date range
+    if (startDateObj || endDateObj) {
+      const d = new Date(row.date);
+      if (startDateObj && d < startDateObj) return false;
+      if (endDateObj && d > endDateObj) return false;
     }
 
     return true;
   });
-}
 
-/**
- * Sort the filtered data based on sortBy + sortOrder.
- */
-function applySorting(data, filters) {
-  const { sortBy, sortOrder } = filters;
-  const dir = sortOrder === 'asc' ? 1 : -1;
+  // 2) SORTING
+  filtered.sort((a, b) => {
+    let valA;
+    let valB;
 
-  const sorted = [...data];
-
-  sorted.sort((a, b) => {
-    let cmp = 0;
-
-    if (sortBy === 'quantity') {
-      const qa = Number(a['Quantity']) || 0;
-      const qb = Number(b['Quantity']) || 0;
-      cmp = qa - qb;
-    } else if (sortBy === 'customer') {
-      const na = String(a['Customer Name'] || '');
-      const nb = String(b['Customer Name'] || '');
-      cmp = na.localeCompare(nb);
-    } else {
-      // default: date (newest first)
-      const da = new Date(a['Date']);
-      const db = new Date(b['Date']);
-      cmp = da - db;
+    switch (sortBy) {
+      case "quantity":
+        valA = a.quantity || 0;
+        valB = b.quantity || 0;
+        break;
+      case "customer":
+        valA = (a.customerName || "").toLowerCase();
+        valB = (b.customerName || "").toLowerCase();
+        break;
+      case "date":
+      default:
+        valA = new Date(a.date);
+        valB = new Date(b.date);
+        break;
     }
 
-    return cmp * dir;
+    if (valA < valB) return sortOrder === "asc" ? -1 : 1;
+    if (valA > valB) return sortOrder === "asc" ? 1 : -1;
+    return 0;
   });
 
-  return sorted;
-}
+  // 3) PAGINATION
+  const totalItems = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / sizeNum));
 
-/**
- * Build unique option lists for filter dropdowns.
- * (Uses the full dataset, not just filtered items.)
- */
-function buildFilterOptions(data) {
-  const unique = key =>
-    [...new Set(data.map(row => row[key]).filter(Boolean))].sort();
+  const startIndex = (pageNum - 1) * sizeNum;
+  const endIndex = startIndex + sizeNum;
 
-  return {
-    regions: unique('Customer Region'),
-    genders: unique('Gender'),
-    categories: unique('Product Category'),
-    paymentMethods: unique('Payment Method'),
-    tags: unique('Tags'),
-  };
-}
-
-/**
- * Main service function called by the controller.
- * Returns paginated + filtered sales plus metadata.
- */
-async function getSales(query) {
-  await ensureDataLoaded();
-
-  const filters = parseFilters(query);
-
-  // 1. Search + filter
-  const filtered = applySearchAndFilters(salesCache, filters);
-
-  // 2. Sorting
-  const sorted = applySorting(filtered, filters);
-
-  // 3. Pagination
-  const { pageSize } = filters;
-  let { page } = filters;
-
-  const totalItems = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-
-  if (page > totalPages) page = totalPages;
-
-  const startIndex = (page - 1) * pageSize;
-  const items = sorted.slice(startIndex, startIndex + pageSize);
-
-  // 4. Filter options for the UI
-  const filterOptions = buildFilterOptions(salesCache);
+  const items = filtered.slice(startIndex, endIndex);
 
   return {
     items,
+    page: pageNum,
+    pageSize: sizeNum,
     totalItems,
     totalPages,
-    currentPage: page,
-    pageSize,
-    filters: filterOptions,
   };
 }
 
-module.exports = {
-  getSales,
-};
+/**
+ * Helper: "a,b,c" -> ["a","b","c"]
+ */
+function splitParam(value) {
+  if (!value) return [];
+  return String(value)
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
