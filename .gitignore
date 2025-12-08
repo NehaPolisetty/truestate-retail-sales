@@ -1,0 +1,15 @@
+# Node modules
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Large dataset
+backend/src/data/sales.csv
+backend/src/data/*.csv
+
+# Build files
+dist/
+build/
+
+# Environment
+.env
