@@ -1,6 +1,7 @@
 // src/services/api.js
 
-const API_BASE_URL = 'http://localhost:4000/api';
+const API_BASE_URL = "https://truestate-retail-sales-2.onrender.com/api";
+
 
 /**
  * Build query string and call the backend.
